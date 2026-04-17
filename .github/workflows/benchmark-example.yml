@@ -1,45 +1,162 @@
-name: AI Model Benchmark Example
+name: Benchmark AI Models
+
 on:
   pull_request:
-    types: [opened, synchronize]
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      task_name:
+        description: 'Benchmark task name'
+        required: true
+        default: 'web-scraper-benchmark'
+      code_prompt:
+        description: 'Code generation prompt'
+        required: true
+        default: 'Write Python code to scrape Hacker News homepage'
 
 jobs:
-  benchmark:
+  benchmark-models:
     runs-on: ubuntu-latest
+    name: Compare Model Performance
+    
     steps:
-      - uses: actions/checkout@v3
+      - name: Checkout code
+        uses: actions/checkout@v4
       
-      - name: Run Benchmark
+      - name: Run AI Model Benchmark
         id: benchmark
-        run: |
-          RESPONSE=$(curl -X POST ${{ secrets.BENCHMARK_API_URL }}/api/v1/benchmark \
-            -H "Authorization: Bearer ${{ secrets.BENCHMARK_API_KEY }}" \
-            -H "Content-Type: application/json" \
-            -d '{
-              "task": "Write a Python function to calculate Fibonacci numbers",
-              "category": "algorithms"
-            }')
-          
-          echo "response=$RESPONSE" >> $GITHUB_OUTPUT
-          BENCHMARK_ID=$(echo $RESPONSE | jq -r '.benchmark_id')
-          echo "benchmark_id=$BENCHMARK_ID" >> $GITHUB_OUTPUT
-      
-      - name: Wait for Results
-        run: sleep 30
-      
-      - name: Get Results
-        run: |
-          curl -X GET ${{ secrets.BENCHMARK_API_URL }}/api/v1/benchmark/${{ steps.benchmark.outputs.benchmark_id }} \
-            -H "Authorization: Bearer ${{ secrets.BENCHMARK_API_KEY }}" \
-            | jq '.'
-      
-      - name: Comment PR
-        uses: actions/github-script@v6
+        uses: yourusername/open-model-benchmark-api@v1
         with:
-          script: |
-            github.rest.issues.createComment({
-              issue_number: context.issue.number,
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              body: '✅ AI Model Benchmark Complete! View results: ${{ secrets.BENCHMARK_API_URL }}/benchmark/${{ steps.benchmark.outputs.benchmark_id }}'
-            })
+          api_key: ${{ secrets.BENCHMARK_API_KEY }}
+          task_name: ${{ github.event.inputs.task_name || 'ci-web-scraper' }}
+          task_description: 'Benchmark web scraping code generation across models'
+          code_prompt: ${{ github.event.inputs.code_prompt || 'Write Python code using BeautifulSoup to scrape Hacker News homepage and return list of story titles with URLs' }}
+          expected_output: 'Returns list of dicts with title and url keys'
+          models: 'qwen-3.6-b,qwen-3.6-14b,claude-opus,gpt-4-turbo'
+          task_category: 'web_scraping'
+          comment_on_pr: 'true'
+          upload_results: 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Display benchmark summary
+        run: |
+          echo "==================================="
+          echo "Benchmark Complete!"
+          echo "==================================="
+          echo ""
+          echo "🏆 Best Model: ${{ steps.benchmark.outputs.best_model }}"
+          echo "📊 Accuracy: $(echo "${{ steps.benchmark.outputs.best_accuracy }} * 100" | bc)%"
+          echo "💰 Cost: \$${{ steps.benchmark.outputs.best_cost }}"
+          echo "🔗 Results: ${{ steps.benchmark.outputs.results_url }}"
+          echo ""
+          cat benchmark-summary.txt || echo "Summary file not available"
+      
+      - name: Create benchmark badge
+        run: |
+          ACCURACY=$(printf "%.0f" $(echo "${{ steps.benchmark.outputs.best_accuracy }} * 100" | bc))
+          MODEL="${{ steps.benchmark.outputs.best_model }}"
+          
+          # Color based on accuracy
+          if [ $ACCURACY -ge 90 ]; then
+            COLOR="brightgreen"
+          elif [ $ACCURACY -ge 75 ]; then
+            COLOR="green"
+          elif [ $ACCURACY -ge 60 ]; then
+            COLOR="yellow"
+          else
+            COLOR="red"
+          fi
+          
+          echo "![Benchmark](${{ steps.benchmark.outputs.results_url }}/badge.svg?model=${MODEL}&accuracy=${ACCURACY}&color=${COLOR})" > benchmark-badge.md
+          echo "📛 Badge created for $MODEL at ${ACCURACY}% accuracy"
+      
+      - name: Upload badge
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-badge
+          path: benchmark-badge.md
+      
+      - name: Check quality gate
+        run: |
+          ACCURACY=${{ steps.benchmark.outputs.best_accuracy }}
+          
+          if (( $(echo "$ACCURACY < 0.80" | bc -l) )); then
+            echo "⚠️ Warning: Best model accuracy ($ACCURACY) is below 80%"
+            echo "Consider reviewing task definition or model selection"
+          else
+            echo "✅ Quality gate passed: $ACCURACY >= 0.80"
+          fi
+      
+      - name: Create performance report
+        run: |
+          cat > performance-report.md <<EOF
+          # AI Model Benchmark Report
+          
+          **Date:** $(date -u +"%Y-%m-%d %H:%M:%S UTC")
+          **Benchmark ID:** ${{ steps.benchmark.outputs.benchmark_id }}
+          **Task:** ${{ github.event.inputs.task_name || 'ci-web-scraper' }}
+          
+          ## Winner
+          - **Model:** ${{ steps.benchmark.outputs.best_model }}
+          - **Accuracy:** $(echo "${{ steps.benchmark.outputs.best_accuracy }} * 100" | bc)%
+          - **Cost:** \$${{ steps.benchmark.outputs.best_cost }}
+          
+          ## Full Results
+          View detailed comparison: [${{ steps.benchmark.outputs.results_url }}](${{ steps.benchmark.outputs.results_url }})
+          
+          ## Recommendation
+          Based on this benchmark, **${{ steps.benchmark.outputs.best_model }}** offers the best performance for this task type.
+          
+          ---
+          *Generated by [Open Model Benchmark](https://github.com/yourusername/open-model-benchmark-api)*
+          EOF
+          
+          cat performance-report.md
+      
+      - name: Upload performance report
+        uses: actions/upload-artifact@v4
+        with:
+          name: performance-report
+          path: performance-report.md
+          retention-days: 90
+
+  benchmark-multiple-tasks:
+    runs-on: ubuntu-latest
+    name: Multi-Task Benchmark Suite
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    
+    strategy:
+      matrix:
+        task:
+          - name: 'api-client'
+            prompt: 'Generate TypeScript code to create a REST API client for GitHub Issues API'
+            category: 'api_integration'
+          - name: 'data-transform'
+            prompt: 'Write Python code to convert CSV to JSON with pandas'
+            category: 'data_processing'
+          - name: 'cli-tool'
+            prompt: 'Create Node.js CLI tool that counts lines of code in a directory'
+            category: 'cli_tools'
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      
+      - name: Benchmark ${{ matrix.task.name }}
+        uses: yourusername/open-model-benchmark-api@v1
+        with:
+          api_key: ${{ secrets.BENCHMARK_API_KEY }}
+          task_name: ${{ matrix.task.name }}
+          code_prompt: ${{ matrix.task.prompt }}
+          expected_output: 'Production-quality code'
+          models: 'qwen-3.6-b,claude-opus'
+          task_category: ${{ matrix.task.category }}
+      
+      - name: Archive results
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-${{ matrix.task.name }}
+          path: benchmark-results.json

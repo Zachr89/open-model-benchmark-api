@@ -1,0 +1,148 @@
+name: Test Benchmark Action
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'action.yml'
+      - 'action-entrypoint.sh'
+      - '.github/workflows/test-action.yml'
+  pull_request:
+    paths:
+      - 'action.yml'
+      - 'action-entrypoint.sh'
+  workflow_dispatch:
+
+jobs:
+  test-action:
+    runs-on: ubuntu-latest
+    name: Test GitHub Action
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      
+      - name: Make script executable
+        run: chmod +x action-entrypoint.sh
+      
+      - name: Run benchmark action
+        id: benchmark
+        uses: ./
+        with:
+          api_key: ${{ secrets.BENCHMARK_API_KEY }}
+          task_name: 'ci-test-scraper'
+          task_description: 'Test web scraping task for CI validation'
+          code_prompt: 'Write Python code using BeautifulSoup to scrape Hacker News homepage and return list of story titles'
+          expected_output: 'Returns list of strings containing story titles'
+          models: 'qwen-3.6-b,gpt-4-turbo'
+          task_category: 'web_scraping'
+          upload_results: 'true'
+      
+      - name: Validate outputs
+        run: |
+          echo "Benchmark ID: ${{ steps.benchmark.outputs.benchmark_id }}"
+          echo "Best Model: ${{ steps.benchmark.outputs.best_model }}"
+          echo "Best Accuracy: ${{ steps.benchmark.outputs.best_accuracy }}"
+          echo "Best Cost: ${{ steps.benchmark.outputs.best_cost }}"
+          echo "Results URL: ${{ steps.benchmark.outputs.results_url }}"
+          
+          # Verify outputs are not empty
+          if [ -z "${{ steps.benchmark.outputs.benchmark_id }}" ]; then
+            echo "❌ benchmark_id is empty"
+            exit 1
+          fi
+          
+          if [ -z "${{ steps.benchmark.outputs.best_model }}" ]; then
+            echo "❌ best_model is empty"
+            exit 1
+          fi
+          
+          echo "✅ All outputs validated"
+      
+      - name: Display results summary
+        run: |
+          if [ -f benchmark-summary.txt ]; then
+            cat benchmark-summary.txt
+          else
+            echo "⚠️ Summary file not found"
+          fi
+      
+      - name: Verify artifact files exist
+        run: |
+          if [ ! -f benchmark-results.json ]; then
+            echo "❌ benchmark-results.json not found"
+            exit 1
+          fi
+          
+          if [ ! -f benchmark-summary.txt ]; then
+            echo "❌ benchmark-summary.txt not found"
+            exit 1
+          fi
+          
+          echo "✅ Artifact files created successfully"
+      
+      - name: Validate JSON structure
+        run: |
+          # Check that results JSON has expected structure
+          jq -e '.benchmark_id' benchmark-results.json
+          jq -e '.results | length > 0' benchmark-results.json
+          jq -e '.results[0].model' benchmark-results.json
+          jq -e '.results[0].accuracy' benchmark-results.json
+          echo "✅ JSON structure validated"
+
+  test-pr-comment:
+    runs-on: ubuntu-latest
+    name: Test PR Comment Feature
+    if: github.event_name == 'pull_request'
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      
+      - name: Make script executable
+        run: chmod +x action-entrypoint.sh
+      
+      - name: Run with PR comment
+        uses: ./
+        with:
+          api_key: ${{ secrets.BENCHMARK_API_KEY }}
+          task_name: 'pr-comment-test'
+          code_prompt: 'Write a function to validate email addresses using regex'
+          expected_output: 'Returns boolean'
+          models: 'qwen-3.6-b'
+          comment_on_pr: 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  test-fail-threshold:
+    runs-on: ubuntu-latest
+    name: Test Failure Threshold
+    continue-on-error: true
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      
+      - name: Make script executable
+        run: chmod +x action-entrypoint.sh
+      
+      - name: Run with impossible threshold (should fail)
+        id: should_fail
+        uses: ./
+        continue-on-error: true
+        with:
+          api_key: ${{ secrets.BENCHMARK_API_KEY }}
+          task_name: 'threshold-test'
+          code_prompt: 'Write hello world'
+          expected_output: 'Prints hello world'
+          models: 'qwen-3.6-b'
+          fail_on_low_score: '0.99'
+      
+      - name: Verify it failed
+        run: |
+          if [ "${{ steps.should_fail.outcome }}" = "failure" ]; then
+            echo "✅ Correctly failed on low threshold"
+          else
+            echo "❌ Should have failed but didn't"
+            exit 1
+          fi

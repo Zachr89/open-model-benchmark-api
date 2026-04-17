@@ -1,0 +1,109 @@
+name: Publish to GitHub Marketplace
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      
+      - name: Validate action.yml
+        run: |
+          # Check that action.yml has required fields
+          if ! grep -q "name:" action.yml; then
+            echo "❌ Missing 'name' in action.yml"
+            exit 1
+          fi
+          
+          if ! grep -q "description:" action.yml; then
+            echo "❌ Missing 'description' in action.yml"
+            exit 1
+          fi
+          
+          if ! grep -q "branding:" action.yml; then
+            echo "❌ Missing 'branding' in action.yml"
+            exit 1
+          fi
+          
+          echo "✅ action.yml validation passed"
+      
+      - name: Make entrypoint executable
+        run: chmod +x action-entrypoint.sh
+      
+      - name: Create release notes
+        id: notes
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/}
+          cat > release-notes.md <<EOF
+          # Open Model Benchmark - ${VERSION}
+          
+          ## 🚀 GitHub Action for AI Model Benchmarking
+          
+          Like Lighthouse CI, but for comparing AI models (Qwen, Llama, Claude, GPT-4) on real coding tasks.
+          
+          ### Features
+          - ✅ Run benchmarks in your CI/CD pipeline
+          - ✅ Comment results on PRs automatically
+          - ✅ Compare open-source vs proprietary models
+          - ✅ Track accuracy, cost, and latency
+          - ✅ Set quality gates (fail if accuracy < threshold)
+          
+          ### Quick Start
+          \`\`\`yaml
+          - uses: yourusername/open-model-benchmark-api@${VERSION}
+            with:
+              api_key: \${{ secrets.BENCHMARK_API_KEY }}
+              task_name: 'my-benchmark'
+              code_prompt: 'Write code to...'
+              expected_output: 'Should return...'
+          \`\`\`
+          
+          ### Documentation
+          - [Full Action README](ACTION_README.md)
+          - [REST API Docs](README.md)
+          - [Usage Examples](.github/workflows/benchmark-example.yml)
+          
+          ### Support
+          - [Report issues](https://github.com/yourusername/open-model-benchmark-api/issues)
+          - [Discussions](https://github.com/yourusername/open-model-benchmark-api/discussions)
+          
+          ---
+          
+          Get your free API key: [benchmark-api.com/signup](https://benchmark-api.com/signup)
+          EOF
+          
+          cat release-notes.md
+      
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          body_path: release-notes.md
+          files: |
+            action.yml
+            action-entrypoint.sh
+            ACTION_README.md
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Update major version tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/v}
+          MAJOR_VERSION=$(echo $VERSION | cut -d. -f1)
+          
+          git config user.name "GitHub Actions"
+          git config user.email "actions@github.com"
+          
+          # Force update v1, v2, etc. tag to point to latest
+          git tag -fa "v${MAJOR_VERSION}" -m "Update v${MAJOR_VERSION} to ${VERSION}"
+          git push origin "v${MAJOR_VERSION}" --force
+          
+          echo "✅ Updated v${MAJOR_VERSION} tag"

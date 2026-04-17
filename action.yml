@@ -1,0 +1,158 @@
+name: 'Open Model Benchmark'
+description: 'Benchmark AI models (Qwen, Llama, Claude, GPT-4) on coding tasks in your CI pipeline. Like Lighthouse CI, but for AI.'
+author: 'Open Model Benchmark'
+
+branding:
+  icon: 'bar-chart-2'
+  color: 'blue'
+
+inputs:
+  api_key:
+    description: 'API key for Open Model Benchmark service (get free key at benchmark-api.com/signup)'
+    required: true
+  
+  task_name:
+    description: 'Name for this benchmark task'
+    required: true
+  
+  task_description:
+    description: 'Description of what the code should do'
+    required: true
+  
+  code_prompt:
+    description: 'Prompt for the AI models to generate code'
+    required: true
+  
+  expected_output:
+    description: 'Description of expected output behavior'
+    required: true
+  
+  models:
+    description: 'Comma-separated list of models to benchmark (e.g., qwen-3.6-b,claude-opus,gpt-4-turbo)'
+    required: false
+    default: 'qwen-3.6-b,claude-opus,gpt-4-turbo'
+  
+  task_category:
+    description: 'Category of task (code_generation, web_scraping, api_integration, cli_tools, data_processing)'
+    required: false
+    default: 'code_generation'
+  
+  api_endpoint:
+    description: 'API endpoint URL'
+    required: false
+    default: 'https://api.openbenchmark.dev'
+  
+  fail_on_low_score:
+    description: 'Fail the action if best model scores below this accuracy threshold (0.0-1.0)'
+    required: false
+    default: '0.0'
+  
+  comment_on_pr:
+    description: 'Post benchmark results as PR comment (requires GITHUB_TOKEN)'
+    required: false
+    default: 'false'
+  
+  upload_results:
+    description: 'Upload results as workflow artifact'
+    required: false
+    default: 'true'
+
+outputs:
+  benchmark_id:
+    description: 'Unique ID for this benchmark run'
+  
+  best_model:
+    description: 'Name of the best-performing model'
+  
+  best_accuracy:
+    description: 'Accuracy score of the best model (0.0-1.0)'
+  
+  best_cost:
+    description: 'Cost in USD of the best model'
+  
+  results_url:
+    description: 'URL to view full results'
+  
+  results_json:
+    description: 'Full JSON results from the benchmark'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Install dependencies
+      shell: bash
+      run: |
+        if ! command -v jq &> /dev/null; then
+          echo "Installing jq..."
+          sudo apt-get update && sudo apt-get install -y jq
+        fi
+        if ! command -v curl &> /dev/null; then
+          echo "curl not found, installing..."
+          sudo apt-get install -y curl
+        fi
+    
+    - name: Run benchmark
+      shell: bash
+      env:
+        API_KEY: ${{ inputs.api_key }}
+        API_ENDPOINT: ${{ inputs.api_endpoint }}
+        TASK_NAME: ${{ inputs.task_name }}
+        TASK_DESCRIPTION: ${{ inputs.task_description }}
+        CODE_PROMPT: ${{ inputs.code_prompt }}
+        EXPECTED_OUTPUT: ${{ inputs.expected_output }}
+        MODELS: ${{ inputs.models }}
+        TASK_CATEGORY: ${{ inputs.task_category }}
+        FAIL_THRESHOLD: ${{ inputs.fail_on_low_score }}
+        UPLOAD_RESULTS: ${{ inputs.upload_results }}
+      run: |
+        ${{ github.action_path }}/action-entrypoint.sh
+    
+    - name: Comment on PR
+      if: inputs.comment_on_pr == 'true' && github.event_name == 'pull_request'
+      uses: actions/github-script@v7
+      with:
+        github-token: ${{ github.token }}
+        script: |
+          const fs = require('fs');
+          
+          if (!fs.existsSync('benchmark-results.json')) {
+            console.log('No results file found, skipping PR comment');
+            return;
+          }
+          
+          const results = JSON.parse(fs.readFileSync('benchmark-results.json', 'utf8'));
+          
+          // Format results as markdown table
+          let comment = `## 🤖 AI Model Benchmark Results\n\n`;
+          comment += `**Task:** ${results.task}\n\n`;
+          comment += `| Model | Accuracy | Latency | Cost | Tokens | Confidence |\n`;
+          comment += `|-------|----------|---------|------|--------|------------|\n`;
+          
+          results.results.forEach(r => {
+            const accuracy = (r.accuracy * 100).toFixed(1) + '%';
+            const latency = r.latency_ms + 'ms';
+            const cost = '$' + r.cost_usd.toFixed(4);
+            const confidence = (r.confidence * 100).toFixed(0) + '%';
+            comment += `| ${r.model} | ${accuracy} | ${latency} | ${cost} | ${r.tokens_used} | ${confidence} |\n`;
+          });
+          
+          comment += `\n**Summary:** ${results.summary}\n`;
+          comment += `\n📊 [View full results](${results.results_url || 'N/A'})\n`;
+          comment += `\n*Benchmark ID: ${results.benchmark_id}*`;
+          
+          await github.rest.issues.createComment({
+            issue_number: context.issue.number,
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            body: comment
+          });
+    
+    - name: Upload results artifact
+      if: inputs.upload_results == 'true'
+      uses: actions/upload-artifact@v4
+      with:
+        name: benchmark-results
+        path: |
+          benchmark-results.json
+          benchmark-summary.txt
+        retention-days: 30
