@@ -1,0 +1,45 @@
+name: AI Model Benchmark Example
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Run Benchmark
+        id: benchmark
+        run: |
+          RESPONSE=$(curl -X POST ${{ secrets.BENCHMARK_API_URL }}/api/v1/benchmark \
+            -H "Authorization: Bearer ${{ secrets.BENCHMARK_API_KEY }}" \
+            -H "Content-Type: application/json" \
+            -d '{
+              "task": "Write a Python function to calculate Fibonacci numbers",
+              "category": "algorithms"
+            }')
+          
+          echo "response=$RESPONSE" >> $GITHUB_OUTPUT
+          BENCHMARK_ID=$(echo $RESPONSE | jq -r '.benchmark_id')
+          echo "benchmark_id=$BENCHMARK_ID" >> $GITHUB_OUTPUT
+      
+      - name: Wait for Results
+        run: sleep 30
+      
+      - name: Get Results
+        run: |
+          curl -X GET ${{ secrets.BENCHMARK_API_URL }}/api/v1/benchmark/${{ steps.benchmark.outputs.benchmark_id }} \
+            -H "Authorization: Bearer ${{ secrets.BENCHMARK_API_KEY }}" \
+            | jq '.'
+      
+      - name: Comment PR
+        uses: actions/github-script@v6
+        with:
+          script: |
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: '✅ AI Model Benchmark Complete! View results: ${{ secrets.BENCHMARK_API_URL }}/benchmark/${{ steps.benchmark.outputs.benchmark_id }}'
+            })
